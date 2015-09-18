@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"time"
 
 	"github.com/jijeshmohan/pab"
 	"github.com/nlopes/slack"
@@ -13,12 +12,11 @@ import (
 var directRegex = regexp.MustCompile("^<@(\\w+)>: ")
 
 type slackAdapter struct {
-	bot        *pab.Bot
-	stop       chan struct{}
-	chSender   chan slack.OutgoingMessage
-	chReceiver chan slack.SlackEvent
-	api        *slack.Slack
-	wsAPI      *slack.SlackWS
+	bot      *pab.Bot
+	stop     chan struct{}
+	chSender chan slack.OutgoingMessage
+	api      *slack.Client
+	wsAPI    *slack.RTM
 }
 
 func (s *slackAdapter) Name() string {
@@ -28,16 +26,16 @@ func (s *slackAdapter) Name() string {
 func init() {
 	pab.RegisterAdapter("slack", func(b *pab.Bot) (pab.Adapter, error) {
 		return &slackAdapter{
-			bot:        b,
-			stop:       make(chan struct{}),
-			api:        slack.New(os.Getenv("SLACK_TOKEN")),
-			chSender:   make(chan slack.OutgoingMessage),
-			chReceiver: make(chan slack.SlackEvent),
+			bot:      b,
+			stop:     make(chan struct{}),
+			api:      slack.New(os.Getenv("SLACK_TOKEN")),
+			chSender: make(chan slack.OutgoingMessage),
 		}, nil
 	})
 }
 func (s *slackAdapter) Send(res *pab.Response, msg string) {
-	s.chSender <- *s.wsAPI.NewOutgoingMessage(msg, res.Message().ChannelID)
+	params := slack.PostMessageParameters{}
+	s.api.PostMessage(res.Message().ChannelID, msg, params)
 }
 
 func (s *slackAdapter) Receive(msg *pab.Message) {
@@ -45,36 +43,18 @@ func (s *slackAdapter) Receive(msg *pab.Message) {
 }
 
 func (s *slackAdapter) getSelfID() string {
-	return s.api.GetInfo().User.Id
+	return s.wsAPI.GetInfo().User.ID
 }
 
 func (s *slackAdapter) Run() {
-	wsAPI, err := s.api.StartRTM("", "")
-	if err != nil {
-		fmt.Errorf("%s\n", err.Error())
-		panic(err)
-	}
-	go func(wsAPI *slack.SlackWS, chReceiver chan slack.SlackEvent) {
-		defer func() {
-			recover()
-		}()
-		wsAPI.HandleIncomingEvents(chReceiver)
-	}(wsAPI, s.chReceiver)
-	go wsAPI.Keepalive(20 * time.Second)
-	go func(wsAPI *slack.SlackWS, chSender chan slack.OutgoingMessage) {
-		for {
-			select {
-			case msg := <-s.chSender:
-				wsAPI.SendMessage(&msg)
-			}
-		}
-	}(wsAPI, s.chSender)
+	wsAPI := s.api.NewRTM()
+	go wsAPI.ManageConnection()
 	s.wsAPI = wsAPI
 	for {
 		select {
 		case _ = <-s.stop:
 			return
-		case msg := <-s.chReceiver:
+		case msg := <-s.wsAPI.IncomingEvents:
 			switch msg.Data.(type) {
 			case *slack.MessageEvent:
 				a := msg.Data.(*slack.MessageEvent)
@@ -88,7 +68,7 @@ func (s *slackAdapter) Run() {
 }
 
 func (s *slackAdapter) isPrivateMessage(msg *slack.MessageEvent) bool {
-	return msg.ChannelId[0] == 'D'
+	return msg.Channel[0] == 'D' //..ChannelId[0] == 'D'
 }
 
 func (s *slackAdapter) isDirectMessage(msg *slack.MessageEvent) bool {
@@ -109,7 +89,7 @@ func (s *slackAdapter) getDirectMessage(msg *slack.MessageEvent) string {
 
 func (s *slackAdapter) processMessage(msg *slack.MessageEvent) {
 	// ignore self message
-	if msg.UserId == s.getSelfID() {
+	if msg.User == s.getSelfID() {
 		return
 	}
 
@@ -118,14 +98,13 @@ func (s *slackAdapter) processMessage(msg *slack.MessageEvent) {
 	if s.isDirectMessage(msg) {
 		messageType = pab.DirectMsg
 		text = s.getDirectMessage(msg)
-		fmt.Println(text)
 	}
 	if s.isPrivateMessage(msg) {
 		messageType = pab.PrivateMsg
 	}
 	go s.Receive(&pab.Message{
 		Text:      text,
-		ChannelID: msg.ChannelId,
+		ChannelID: msg.Channel,
 		Type:      messageType,
 	})
 }

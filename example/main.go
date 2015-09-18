@@ -12,7 +12,7 @@ import (
 
 func main() {
 	conf := pab.NewConfig()
-	conf.Adapter = "shell" // you can use slack, but make sure to set SLACK_TOKEN environment variable while running
+	conf.Adapter = "slack" // you can use slack, but make sure to set SLACK_TOKEN environment variable while running
 	bot, err := pab.NewBot(conf)
 	if err != nil {
 		fmt.Println("Error while crating bot")
