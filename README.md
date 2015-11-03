@@ -6,7 +6,7 @@ Pab is a personal assistant chat bot. You can create your own bot using pab.
 
 You should understand following concepts for writing your own bot.
 
-* **Adapter** : Specifies the chat service bot is supoorting.
+* **Adapter** : Specifies the chat service bot is supporting.
 * **Handler** : Handlers are the actions bot supports.
 
 #### Handlers
